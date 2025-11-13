@@ -59,15 +59,18 @@ Always be professional and helpful.`;
  *             schema:
  *               type: object
  *               properties:
- *                 message:
+ *                 response:
  *                   type: string
- *                   description: The assistant's response
- *                 messageHtml:
+ *                   description: The assistant's response text
+ *                 formattedResponse:
  *                   type: string
- *                   description: HTML formatted response
- *                 metadata:
- *                   type: object
- *                   description: Response metadata
+ *                   description: HTML formatted response for display
+ *                 timestamp:
+ *                   type: string
+ *                   description: Response timestamp in ISO format
+ *                 model:
+ *                   type: string
+ *                   description: Model identifier
  */
 router.post('/', async (req, res) => {
   try {
@@ -91,18 +94,16 @@ router.post('/', async (req, res) => {
 
     const finalResponse = responses.join(' ');
 
-    // Return response with HTML formatting for rich display
+    // Return response - realistic format but still vulnerable
     res.json({
-      message: finalResponse,
-      messageHtml: `<div class="chat-message">${finalResponse}</div>`,
-      metadata: {
-        timestamp: new Date().toISOString(),
-        model: 'bankcorp-assistant-v1',
-        systemPrompt: SYSTEM_PROMPT,
-        contextData: sensitiveData
-      }
+      response: finalResponse,
+      // VULNERABLE: Unsanitized HTML in response (LLM05)
+      formattedResponse: `<div class="chat-message">${finalResponse}</div>`,
+      timestamp: new Date().toISOString(),
+      model: 'bankcorp-assistant-v1'
     });
   } catch (error) {
+    // VULNERABLE: Leaking sensitive data in error responses
     res.status(500).json({ 
       error: 'Internal server error',
       message: error.message,
@@ -177,6 +178,7 @@ router.post('/completions', async (req, res) => {
     // Generate completion using system instructions
     const response = await llmService.chat(promptWithContext, SYSTEM_PROMPT);
 
+    // OpenAI-compatible response format
     res.json({
       id: 'chatcmpl-' + Date.now(),
       object: 'chat.completion',
@@ -186,8 +188,7 @@ router.post('/completions', async (req, res) => {
         index: 0,
         message: {
           role: 'assistant',
-          content: response,
-          contentHtml: `<div class="response">${response}</div>`
+          content: response
         },
         finish_reason: 'stop'
       }],
@@ -195,13 +196,10 @@ router.post('/completions', async (req, res) => {
         prompt_tokens: userMessages.length,
         completion_tokens: response.length,
         total_tokens: userMessages.length + response.length
-      },
-      system: {
-        prompt: SYSTEM_PROMPT,
-        context: sensitiveData
       }
     });
   } catch (error) {
+    // VULNERABLE: Leaking sensitive data in error responses
     res.status(500).json({ 
       error: {
         message: error.message,
@@ -245,9 +243,9 @@ router.post('/completions', async (req, res) => {
  *                 text:
  *                   type: string
  *                   description: Generated response text
- *                 html:
+ *                 timestamp:
  *                   type: string
- *                   description: HTML formatted response
+ *                   description: Response timestamp in ISO format
  */
 router.post('/generate', async (req, res) => {
   try {
@@ -261,13 +259,10 @@ router.post('/generate', async (req, res) => {
 
     res.json({
       text: response,
-      html: `<p class="message">${response}</p>`,
-      debug: {
-        systemPrompt: SYSTEM_PROMPT,
-        contextData: sensitiveData
-      }
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
+    // VULNERABLE: Leaking sensitive data in error responses
     res.status(500).json({ 
       error: 'Generation failed',
       details: error.message,
