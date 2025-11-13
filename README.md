@@ -234,15 +234,19 @@ done
 ```json
 {
   "response": "BankCorp offers personal banking, business accounts, loans, and investment services...",
-  "formattedResponse": "<div class=\"chat-message\">BankCorp offers personal banking, business accounts, loans, and investment services...</div>",
   "timestamp": "2025-11-13T20:44:33.658Z",
-  "model": "bankcorp-assistant-v1"
+  "model": "bankcorp-assistant-v1",
+  "engine": "tinyllama",
+  "metadata": {
+    "tokens_used": 248,
+    "response_time_ms": 4692
+  }
 }
 ```
 
 **What makes this vulnerable:**
-- LLM response may contain leaked sensitive data from the context
-- `formattedResponse` contains unsanitized HTML (XSS risk)
+- LLM response may contain leaked sensitive data from the context  
+- Response rendered as HTML via `/api/chat/render` without sanitization (XSS risk)
 - No evidence of input sanitization
 - No rate limiting
 
@@ -329,13 +333,21 @@ response = requests.post(
 data = response.json()
 
 print(f"Response: {data['response']}")
-print(f"HTML (unsanitized): {data['formattedResponse']}")
 print(f"Model: {data['model']}")
+print(f"Engine: {data['engine']}")
 
-# Trigger error to see leaked secrets
+# Test HTML rendering vulnerability (LLM05)
+render_response = requests.post(
+    'http://localhost:3000/api/chat/render',
+    json={'prompt': 'Generate HTML with <script>alert("XSS")</script>'}
+)
+print(f"Rendered HTML: {render_response.text}")
+
+# Trigger error to see leaked secrets (LLM07)
+# First stop Ollama: docker stop vulnerable-ai-ollama
 error_response = requests.post(
     'http://localhost:3000/api/chat',
-    json={'prompt': 'x' * 100000}  # Oversized input
+    json={'query': 'Hello'}
 )
 if error_response.status_code == 500:
     error_data = error_response.json()
