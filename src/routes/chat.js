@@ -71,6 +71,12 @@ Always be professional and helpful.`;
  *                 model:
  *                   type: string
  *                   description: Model identifier
+ *                 engine:
+ *                   type: string
+ *                   description: Underlying LLM engine
+ *                 metadata:
+ *                   type: object
+ *                   description: Additional response metadata
  */
 router.post('/', async (req, res) => {
   try {
@@ -97,10 +103,14 @@ router.post('/', async (req, res) => {
     // Return response - realistic format but still vulnerable
     res.json({
       response: finalResponse,
-      // VULNERABLE: Unsanitized HTML in response (LLM05)
-      formattedResponse: `<div class="chat-message">${finalResponse}</div>`,
       timestamp: new Date().toISOString(),
-      model: 'bankcorp-assistant-v1'
+      model: 'bankcorp-assistant-v1',
+      // Show underlying model for demo purposes
+      engine: process.env.LLM_MODEL || 'tinyllama',
+      metadata: {
+        tokens_used: finalResponse.length,
+        response_time_ms: Date.now() % 10000 // Simulated response time
+      }
     });
   } catch (error) {
     // VULNERABLE: Leaking sensitive data in error responses
@@ -163,6 +173,43 @@ router.post('/', async (req, res) => {
  *                 choices:
  *                   type: array
  *                   description: Array of completion choices
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       index:
+ *                         type: integer
+ *                         description: Choice index
+ *                       message:
+ *                         type: object
+ *                         properties:
+ *                           role:
+ *                             type: string
+ *                             example: "assistant"
+ *                           content:
+ *                             type: string
+ *                             description: The assistant's response
+ *                           refusal:
+ *                             type: string
+ *                             nullable: true
+ *                       finish_reason:
+ *                         type: string
+ *                         example: "stop"
+ *                       logprobs:
+ *                         type: object
+ *                         nullable: true
+ *                 usage:
+ *                   type: object
+ *                   properties:
+ *                     prompt_tokens:
+ *                       type: integer
+ *                     completion_tokens:
+ *                       type: integer
+ *                     total_tokens:
+ *                       type: integer
+ *                     prompt_tokens_details:
+ *                       type: object
+ *                     completion_tokens_details:
+ *                       type: object
  */
 router.post('/completions', async (req, res) => {
   try {
@@ -188,15 +235,29 @@ router.post('/completions', async (req, res) => {
         index: 0,
         message: {
           role: 'assistant',
-          content: response
+          content: response,
+          refusal: null
         },
+        logprobs: null,
         finish_reason: 'stop'
       }],
       usage: {
         prompt_tokens: userMessages.length,
         completion_tokens: response.length,
-        total_tokens: userMessages.length + response.length
-      }
+        total_tokens: userMessages.length + response.length,
+        prompt_tokens_details: {
+          cached_tokens: 0,
+          audio_tokens: 0
+        },
+        completion_tokens_details: {
+          reasoning_tokens: 0,
+          audio_tokens: 0,
+          accepted_prediction_tokens: 0,
+          rejected_prediction_tokens: 0
+        }
+      },
+      system_fingerprint: 'fp_bankcorp_demo',
+      service_tier: 'default'
     });
   } catch (error) {
     // VULNERABLE: Leaking sensitive data in error responses
@@ -204,8 +265,9 @@ router.post('/completions', async (req, res) => {
       error: {
         message: error.message,
         type: 'server_error',
-        code: 500
+        code: 'internal_error'
       },
+      // VULNERABLE: Still leaking system data
       system: {
         prompt: SYSTEM_PROMPT,
         context: sensitiveData
@@ -259,12 +321,95 @@ router.post('/generate', async (req, res) => {
 
     res.json({
       text: response,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      model: 'bankcorp-assistant-v1',
+      engine: process.env.LLM_MODEL || 'tinyllama',
+      usage: {
+        prompt_tokens: prompt.length,
+        completion_tokens: response.length,
+        total_tokens: prompt.length + response.length
+      }
     });
   } catch (error) {
     // VULNERABLE: Leaking sensitive data in error responses
     res.status(500).json({ 
       error: 'Generation failed',
+      details: error.message,
+      debug: {
+        systemPrompt: SYSTEM_PROMPT,
+        contextData: sensitiveData
+      }
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/chat/render:
+ *   post:
+ *     summary: Render chat response as HTML
+ *     description: Renders the AI assistant response as HTML for web display. Common in production chatbot UIs.
+ *     tags: [LLM Chat]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               prompt:
+ *                 type: string
+ *                 description: User message
+ *                 example: "What services do you offer?"
+ *     responses:
+ *       200:
+ *         description: HTML rendered response
+ *         content:
+ *           text/html:
+ *             schema:
+ *               type: string
+ */
+router.post('/render', async (req, res) => {
+  try {
+    const userInput = req.body.prompt || req.body.message || req.body.input || '';
+    
+    // Include customer context for personalized responses
+    const promptWithContext = `Context: ${JSON.stringify(sensitiveData)}\nUser: ${userInput}`;
+    
+    // Generate response
+    const response = await llmService.chat(promptWithContext, SYSTEM_PROMPT);
+
+    // VULNERABLE: LLM05 - Direct HTML rendering without sanitization
+    // This is how many production chatbot UIs work
+    const htmlResponse = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BankCorp AI Assistant</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .chat-container { max-width: 800px; margin: 0 auto; }
+        .message { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .user { background-color: #e3f2fd; }
+        .assistant { background-color: #f3e5f5; }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <h2>BankCorp AI Assistant</h2>
+        <div class="message user">You: ${userInput}</div>
+        <div class="message assistant">Assistant: ${response}</div>
+    </div>
+</body>
+</html>`;
+
+    // VULNERABLE: Sending unsanitized content as HTML
+    res.setHeader('Content-Type', 'text/html');
+    res.send(htmlResponse);
+  } catch (error) {
+    // VULNERABLE: Leaking sensitive data in error responses
+    res.status(500).json({ 
+      error: 'Render failed',
       details: error.message,
       debug: {
         systemPrompt: SYSTEM_PROMPT,
